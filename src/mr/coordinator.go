@@ -1,18 +1,129 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
+import (
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"sync"
+	"time"
+)
 
+const (
+	TaskStatusReady   = 0
+	TaskStatusQueue   = 1
+	TaskStatusRunning = 2
+	TaskStatusFinish  = 3
+	TaskStatusError   = 4
+)
+
+const (
+	MaxTasksRunning  = 5 * time.Second
+	ScheduleInterval = 500 * time.Millisecond
+)
+
+type TaskStatus struct {
+	Status    int
+	WorkerId  int
+	StartTime time.Time
+}
 
 type Coordinator struct {
 	// Your definitions here.
+	files        []string
+	nReduce      int
+	taskPhase    TaskPhase    // mu
+	taskStatuses []TaskStatus // all TaskStatusReady initially, mu
+	mu           sync.Mutex
+	done         bool // true if all the tasks are finished, mu
+	workerSeq    int
+	taskCh       chan *Task // mu
+}
 
+func (c *Coordinator) initMapTask() {
+	c.taskPhase = MapPhase
+	c.taskStatuses = make([]TaskStatus, len(c.files))
+}
+
+func (c *Coordinator) initReduceTask() {
+	DPrintf("init reduce tasks")
+	c.taskPhase = ReducePhase
+	c.taskStatuses = make([]TaskStatus, c.nReduce)
+}
+
+func (c *Coordinator) getTask(taskSeq int) *Task {
+	task := &Task{
+		FileName: "",
+		NReduce:  c.nReduce,
+		NMap:     len(c.files),
+		Seq:      taskSeq,
+		Phase:    c.taskPhase,
+		Alive:    true,
+	}
+	DPrintf("c: %+v, taskSeq: %d, lenFiles: %d, lenTs: %d", c, taskSeq, len(c.files), len(c.taskStatuses))
+	if task.Phase == MapPhase {
+		task.FileName = c.files[taskSeq]
+	}
+	return task
+}
+
+func (c *Coordinator) schedule() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.done {
+		return
+	}
+	allFinish := true
+	for index, ts := range c.taskStatuses {
+		switch ts.Status {
+		case TaskStatusReady:
+			allFinish = false
+			c.taskCh <- c.getTask(index)
+			c.taskStatuses[index].Status = TaskStatusQueue
+		case TaskStatusQueue:
+			allFinish = false
+		case TaskStatusRunning:
+			allFinish = false
+			if time.Now().Sub(ts.StartTime) > MaxTasksRunning {
+				c.taskStatuses[index].Status = TaskStatusQueue
+				c.taskCh <- c.getTask(index)
+			}
+		case TaskStatusFinish:
+			// nothing
+		case TaskStatusError:
+			allFinish = false
+			c.taskStatuses[index].Status = TaskStatusQueue
+			c.taskCh <- c.getTask(index)
+		default:
+			panic("ts.Status error")
+		}
+	}
+	if allFinish {
+		if c.taskPhase == MapPhase {
+			c.initReduceTask()
+		} else {
+			c.done = true
+		}
+	}
+}
+
+func (c *Coordinator) registerTask(args *TaskArgs, task *Task) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if task.Phase != c.taskPhase {
+		panic("task phase not compatible")
+	}
+
+	c.taskStatuses[task.Seq].Status = TaskStatusRunning
+	c.taskStatuses[task.Seq].WorkerId = args.WorkerId
+	c.taskStatuses[task.Seq].StartTime = time.Now()
 }
 
 // Your code here -- RPC handlers for the worker to call.
+
 
 //
 // an example RPC handler.
@@ -23,7 +134,6 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -50,7 +160,6 @@ func (c *Coordinator) Done() bool {
 
 	// Your code here.
 
-
 	return ret
 }
 
@@ -63,7 +172,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
-
 
 	c.server()
 	return &c
