@@ -1,6 +1,9 @@
 package mr
 
-import "fmt"
+import (
+	"fmt"
+	"log"
+)
 
 type TaskPhase int
 
@@ -8,6 +11,14 @@ const (
 	MapPhase    TaskPhase = 0
 	ReducePhase TaskPhase = 1
 )
+
+const Debug = false
+
+func DPrintf(format string, v ...interface{}) {
+	if Debug {
+		log.Printf(format + "\n", v...)
+	}
+}
 
 type Task struct {
 	FileName string

@@ -28,6 +28,7 @@ type TaskArgs struct {
 	WorkerId int
 }
 
+// TaskReply will return a *Task
 type TaskReply struct {
 	Task *Task
 }
@@ -45,6 +46,7 @@ type ReportTaskReply struct {
 type RegisterArgs struct {
 }
 
+// coordinator will give a workerId in RegisterReply
 type RegisterReply struct {
 	WorkerId int
 }

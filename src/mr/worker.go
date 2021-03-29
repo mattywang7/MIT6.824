@@ -1,10 +1,13 @@
 package mr
 
-import "fmt"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
-
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,7 +27,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
@@ -32,10 +34,85 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
+	w := worker{}
+	w.mapf = mapf
+	w.reducef = reducef
+	w.register()
+	w.run()
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
+}
+
+// worker definition
+type worker struct {
+	id      int
+	mapf    func(string, string) []KeyValue
+	reducef func(string, []string) string
+}
+
+func (w *worker) run() {
+	for {
+		t := w.reqTask()
+		if !t.Alive {
+			DPrintf("Worker get task not alive, exit")
+			return
+		}
+		w.doTask(t)
+	}
+}
+
+func (w *worker) reqTask() *Task {
+	args := TaskArgs{}
+	args.WorkerId = w.id
+	reply := TaskReply{}
+
+	if ok := call("Coordinator.GetOneTask", &args, &reply); !ok {
+		DPrintf("worker get task failed, exit")
+		os.Exit(1)
+	}
+	DPrintf("worker get task:%+v", reply.Task)
+	return reply.Task
+}
+
+func (w *worker) doTask(t *Task) {
+	DPrintf("doing task...")
+
+	switch t.Phase {
+	case MapPhase:
+		w.doMapTask(t)
+	case ReducePhase:
+		w.doReduceTask(t)
+	default:
+		panic(fmt.Sprintf("task phase err: %v", t.Phase))
+	}
+}
+
+func (w *worker) doMapTask(t *Task) {
+	contents, err := ioutil.ReadFile(t.FileName)
+	if err != nil {
+		w.reportTask(t, false, err)
+	}
+}
+
+func (w *worker) doReduceTask(t *Task) {
+	// TODO
+}
+
+// helper function reportTask
+func (w *worker) reportTask(t *Task, done bool, err error) {
+	// TODO
+}
+
+// register ask the Coordinator to get a workerId
+func (w *worker) register() {
+	args := &RegisterArgs{}
+	reply := &RegisterReply{}
+	if ok := call("Coordinator.RegisterWorker", args, reply); !ok {
+		log.Fatal("Register fail")
+	}
+	w.id = reply.WorkerId
 }
 
 //
