@@ -109,6 +109,7 @@ func (c *Coordinator) schedule() {
 	}
 }
 
+// registerTask set the taskStatuses of that task in c
 func (c *Coordinator) registerTask(args *TaskArgs, task *Task) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -123,7 +124,44 @@ func (c *Coordinator) registerTask(args *TaskArgs, task *Task) {
 }
 
 // Your code here -- RPC handlers for the worker to call.
+func (c *Coordinator) GetOneTask(args *TaskArgs, reply *TaskReply) error {
+	task := <-c.taskCh
+	reply.Task = task
 
+	if task.Alive {
+		c.registerTask(args, task)
+	}
+	DPrintf("in get one task args: %v, reply: %v", args, reply)
+	return nil
+}
+
+func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	DPrintf("get report task: %+v, taskPhase: %+v", args, c.taskPhase)
+
+	if c.taskPhase != args.Phase || args.WorkerId != c.taskStatuses[args.Seq].WorkerId {
+		return nil
+	}
+
+	if args.Done {
+		c.taskStatuses[args.Seq].Status = TaskStatusFinish
+	} else {
+		c.taskStatuses[args.Seq].Status = TaskStatusError
+	}
+
+	go c.schedule()
+	return nil
+}
+
+func (c *Coordinator) RegisterWorker(args *RegisterArgs, reply *RegisterReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workerSeq++
+	reply.WorkerId = c.workerSeq
+	return nil
+}
 
 //
 // an example RPC handler.
@@ -156,11 +194,16 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.done
+}
 
-	// Your code here.
-
-	return ret
+func (c *Coordinator) tickSchedule() {
+	for !c.Done() {
+		go c.schedule()
+		time.Sleep(ScheduleInterval)
+	}
 }
 
 //
@@ -172,7 +215,18 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
+	c.nReduce = nReduce
+	c.files = files
+	if nReduce > len(c.files) {
+		c.taskCh = make(chan *Task, nReduce)
+	} else {
+		c.taskCh = make(chan *Task, len(c.files))
+	}
+
+	c.initMapTask()
+	go c.tickSchedule()
 
 	c.server()
+	DPrintf("Coordinator Made")
 	return &c
 }
